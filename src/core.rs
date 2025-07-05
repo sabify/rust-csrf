@@ -1,40 +1,37 @@
 //! Module containing the core functionality for CSRF protection
 
-use std::{borrow::Cow, error::Error, fmt, io::Cursor};
+use std::{borrow::Cow, io::Cursor};
 
-use aead::{generic_array::GenericArray, Aead, AeadCore, Key, KeyInit};
+use aead::{
+    Aead, AeadCore, KeyInit,
+    array::Array,
+    rand_core::{OsError, OsRng, TryRngCore},
+};
 use aes_gcm::Aes256Gcm;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use chacha20poly1305::ChaCha20Poly1305;
-use chrono::{prelude::*, Duration};
+use chrono::{Duration, prelude::*};
 use data_encoding::{BASE64, BASE64URL};
 use hmac::{Hmac, Mac};
-use rand::RngCore;
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
 /// An `enum` of all CSRF related errors.
-#[derive(Debug, Hash, Eq, PartialEq, Clone)]
+#[derive(thiserror::Error, Debug, Eq, PartialEq, Clone)]
 pub enum CsrfError {
-    /// There was an internal error.
+    /// Library error
+    #[error("Internal error")]
     InternalError,
-    /// There was CSRF token validation failure.
+    /// Validation failure
+    #[error("Validation failed: {0}")]
     ValidationFailure(String),
-    /// There was a CSRF token encryption failure.
+    /// Encryption failure
+    #[error("Encryption failed: {0}")]
     EncryptionFailure(String),
-}
-
-impl Error for CsrfError {}
-
-impl fmt::Display for CsrfError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CsrfError::InternalError => write!(f, "Library error"),
-            CsrfError::ValidationFailure(err) => write!(f, "Validation failed: {err}"),
-            CsrfError::EncryptionFailure(err) => write!(f, "Encryption failed: {err}"),
-        }
-    }
+    /// OsRng get random failure
+    #[error("OsRng get random failed: {0}")]
+    OsRng(#[from] OsError),
 }
 
 /// A signed, encrypted CSRF token that is suitable to be displayed to end users.
@@ -182,8 +179,7 @@ pub trait CsrfProtection: Send + Sync {
         // TODO We had to get rid of `ring` because of `gcc` conflicts with `rust-crypto`, and
         // `ring`'s RNG didn't require mutability. Now create a new one per call which is not a
         // great idea.
-        rand::rngs::OsRng.fill_bytes(buf);
-        Ok(())
+        OsRng.try_fill_bytes(buf).map_err(Into::into)
     }
 
     /// Given an optional previous token and a TTL, generate a matching token and cookie pair.
@@ -216,27 +212,17 @@ pub struct HmacCsrfProtection {
 
 impl HmacCsrfProtection {
     /// Returns n `HmacCsrfProtection` instance with auto generated key.
-    pub fn new() -> Self {
-        HmacCsrfProtection {
-            // Infallible
-            hmac: <HmacSha256 as Mac>::new_from_slice(&HmacSha256::generate_key(
-                &mut rand::rngs::OsRng,
-            ))
-            .unwrap(),
-        }
+    pub fn new() -> Result<Self, CsrfError> {
+        let key = HmacSha256::generate_key().map_err(CsrfError::from)?;
+        Ok(HmacCsrfProtection {
+            hmac: HmacSha256::new(&key),
+        })
     }
     /// Given an HMAC key, return an `HmacCsrfProtection` instance.
-    pub fn from_key(hmac_key: [u8; 32]) -> Self {
+    pub fn from_key(hmac_key: [u8; 64]) -> Self {
         HmacCsrfProtection {
-            // Infallible
-            hmac: <HmacSha256 as Mac>::new_from_slice(&hmac_key).unwrap(),
+            hmac: HmacSha256::new(&hmac_key.into()),
         }
-    }
-}
-
-impl Default for HmacCsrfProtection {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -326,28 +312,19 @@ pub struct AesGcmCsrfProtection {
 
 impl AesGcmCsrfProtection {
     /// Returns an `AesGcmCsrfProtection` instance with auto generated key.
-    pub fn new() -> Self {
-        AesGcmCsrfProtection {
+    pub fn new() -> Result<Self, CsrfError> {
+        Ok(AesGcmCsrfProtection {
             aead: {
-                let key = Aes256Gcm::generate_key(&mut rand::rngs::OsRng);
+                let key = Aes256Gcm::generate_key().map_err(CsrfError::from)?;
                 Aes256Gcm::new(&key)
             },
-        }
+        })
     }
     /// Given an AES256 key, return an `AesGcmCsrfProtection` instance.
     pub fn from_key(aead_key: [u8; 32]) -> Self {
         AesGcmCsrfProtection {
-            aead: {
-                let key = Key::<Aes256Gcm>::from_slice(&aead_key);
-                Aes256Gcm::new(key)
-            },
+            aead: { Aes256Gcm::new(&aead_key.into()) },
         }
-    }
-}
-
-impl Default for AesGcmCsrfProtection {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -368,7 +345,7 @@ impl CsrfProtection for AesGcmCsrfProtection {
         plaintext[32..40].copy_from_slice(&expires_bytes);
         plaintext[40..].copy_from_slice(token_value);
 
-        let nonce = Aes256Gcm::generate_nonce(&mut rand::rngs::OsRng);
+        let nonce = Aes256Gcm::generate_nonce().map_err(CsrfError::from)?;
 
         let ciphertext = self
             .aead
@@ -389,7 +366,7 @@ impl CsrfProtection for AesGcmCsrfProtection {
         self.random_bytes(&mut plaintext[0..32])?; // padding
         plaintext[32..].copy_from_slice(token_value);
 
-        let nonce = Aes256Gcm::generate_nonce(&mut rand::rngs::OsRng);
+        let nonce = Aes256Gcm::generate_nonce().map_err(CsrfError::from)?;
 
         let ciphertext = self
             .aead
@@ -413,11 +390,12 @@ impl CsrfProtection for AesGcmCsrfProtection {
             )));
         }
 
-        let nonce = GenericArray::from_slice(&cookie[0..12]);
+        // Infallible
+        let nonce = Array::try_from(&cookie[0..12]).unwrap();
 
         let plaintext = self
             .aead
-            .decrypt(nonce, cookie[12..].as_ref())
+            .decrypt(&nonce, cookie[12..].as_ref())
             .map_err(|err| {
                 CsrfError::ValidationFailure(format!("Failed to decrypt cookie: {err}"))
             })?;
@@ -440,14 +418,12 @@ impl CsrfProtection for AesGcmCsrfProtection {
             )));
         }
 
-        let nonce = GenericArray::from_slice(&token[0..12]);
+        // Infallible
+        let nonce = Array::try_from(&token[0..12]).unwrap();
 
-        let plaintext = self
-            .aead
-            .decrypt(nonce, token[12..].as_ref())
-            .map_err(|err| {
-                CsrfError::ValidationFailure(format!("Failed to decrypt token: {err}"))
-            })?;
+        let plaintext = self.aead.decrypt(&nonce, &token[12..]).map_err(|err| {
+            CsrfError::ValidationFailure(format!("Failed to decrypt token: {err}"))
+        })?;
 
         Ok(UnencryptedCsrfToken::new(plaintext[32..].to_vec()))
     }
@@ -461,23 +437,17 @@ pub struct ChaCha20Poly1305CsrfProtection {
 
 impl ChaCha20Poly1305CsrfProtection {
     /// Return a new `ChaCha20Poly1305CsrfProtection` instance with auto generated key.
-    pub fn new() -> Self {
-        ChaCha20Poly1305CsrfProtection {
-            aead: ChaCha20Poly1305::new(&ChaCha20Poly1305::generate_key(&mut rand::rngs::OsRng)),
-        }
+    pub fn new() -> Result<Self, CsrfError> {
+        let key = ChaCha20Poly1305::generate_key().map_err(CsrfError::from)?;
+        Ok(ChaCha20Poly1305CsrfProtection {
+            aead: ChaCha20Poly1305::new(&key),
+        })
     }
     /// Given a key, return a `ChaCha20Poly1305CsrfProtection` instance.
     pub fn from_key(aead_key: [u8; 32]) -> Self {
         ChaCha20Poly1305CsrfProtection {
-            // Infallibale
-            aead: ChaCha20Poly1305::new_from_slice(&aead_key).unwrap(),
+            aead: ChaCha20Poly1305::new(&aead_key.into()),
         }
-    }
-}
-
-impl Default for ChaCha20Poly1305CsrfProtection {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -498,7 +468,7 @@ impl CsrfProtection for ChaCha20Poly1305CsrfProtection {
         plaintext[32..40].copy_from_slice(&expires_bytes);
         plaintext[40..].copy_from_slice(token_value);
 
-        let nonce = ChaCha20Poly1305::generate_nonce(&mut rand::rngs::OsRng);
+        let nonce = ChaCha20Poly1305::generate_nonce().map_err(CsrfError::from)?;
 
         let ciphertext = self
             .aead
@@ -519,7 +489,7 @@ impl CsrfProtection for ChaCha20Poly1305CsrfProtection {
         self.random_bytes(&mut plaintext[0..32])?; // padding
         plaintext[32..].copy_from_slice(token_value);
 
-        let nonce = ChaCha20Poly1305::generate_nonce(&mut rand::rngs::OsRng);
+        let nonce = ChaCha20Poly1305::generate_nonce().map_err(CsrfError::from)?;
 
         let ciphertext = self
             .aead
@@ -543,11 +513,12 @@ impl CsrfProtection for ChaCha20Poly1305CsrfProtection {
             )));
         }
 
-        let nonce = GenericArray::from_slice(&cookie[0..12]);
+        // Infallible
+        let nonce = Array::try_from(&cookie[0..12]).unwrap();
 
         let plaintext = self
             .aead
-            .decrypt(nonce, cookie[12..].as_ref())
+            .decrypt(&nonce, cookie[12..].as_ref())
             .map_err(|err| {
                 CsrfError::ValidationFailure(format!("Failed to decrypt cookie: {err}"))
             })?;
@@ -570,11 +541,12 @@ impl CsrfProtection for ChaCha20Poly1305CsrfProtection {
             )));
         }
 
-        let nonce = GenericArray::from_slice(&token[0..12]);
+        // Infallible
+        let nonce = Array::try_from(&token[0..12]).unwrap();
 
         let plaintext = self
             .aead
-            .decrypt(nonce, token[12..].as_ref())
+            .decrypt(&nonce, token[12..].as_ref())
             .map_err(|err| {
                 CsrfError::ValidationFailure(format!("Failed to decrypt token: {err}"))
             })?;
@@ -656,19 +628,22 @@ mod tests {
     // TODO write test that ensures encrypted messages don't contain the plaintext
     // TODO test that checks tokens are repeated when given Some
 
+    const KEY_64: [u8; 64] = *b"0123456701234567012345670123456701234567012345670123456701234567";
+    const KEY2_64: [u8; 64] = *b"7654321076543210765432107654321076543210765432107654321076543210";
+
     const KEY_32: [u8; 32] = *b"01234567012345670123456701234567";
     const KEY2_32: [u8; 32] = *b"76543210765432107654321076543210";
 
     macro_rules! test_cases {
-        ($strct: ident, $md: ident) => {
+        ($strct: ident, $md: ident, $key: ident) => {
             mod $md {
-                use super::KEY_32;
+                use super::*;
                 use data_encoding::BASE64;
-                use $crate::{$strct, CsrfProtection};
+                use $crate::{CsrfProtection, $strct};
 
                 #[test]
                 fn verification_succeeds() {
-                    let protect = $strct::from_key(KEY_32);
+                    let protect = $strct::from_key($key);
                     let (token, cookie) = protect
                         .generate_token_pair(None, 300)
                         .expect("couldn't generate token/cookie pair");
@@ -688,7 +663,7 @@ mod tests {
 
                 #[test]
                 fn modified_cookie_value_fails() {
-                    let protect = $strct::from_key(KEY_32);
+                    let protect = $strct::from_key($key);
                     let (_, mut cookie) = protect
                         .generate_token_pair(None, 300)
                         .expect("couldn't generate token/cookie pair");
@@ -701,7 +676,7 @@ mod tests {
 
                 #[test]
                 fn modified_token_value_fails() {
-                    let protect = $strct::from_key(KEY_32);
+                    let protect = $strct::from_key($key);
                     let (mut token, _) = protect
                         .generate_token_pair(None, 300)
                         .expect("couldn't generate token/token pair");
@@ -714,7 +689,7 @@ mod tests {
 
                 #[test]
                 fn mismatched_cookie_token_fail() {
-                    let protect = $strct::from_key(KEY_32);
+                    let protect = $strct::from_key($key);
                     let (token, _) = protect
                         .generate_token_pair(None, 300)
                         .expect("couldn't generate token/token pair");
@@ -738,7 +713,7 @@ mod tests {
 
                 #[test]
                 fn expired_token_fail() {
-                    let protect = $strct::from_key(KEY_32);
+                    let protect = $strct::from_key($key);
                     let (token, cookie) = protect
                         .generate_token_pair(None, -1)
                         .expect("couldn't generate token/cookie pair");
@@ -759,20 +734,22 @@ mod tests {
         };
     }
 
-    test_cases!(AesGcmCsrfProtection, aesgcm);
-    test_cases!(ChaCha20Poly1305CsrfProtection, chacha20poly1305);
-    test_cases!(HmacCsrfProtection, hmac);
+    test_cases!(AesGcmCsrfProtection, aesgcm, KEY_32);
+    test_cases!(ChaCha20Poly1305CsrfProtection, chacha20poly1305, KEY_32);
+    test_cases!(HmacCsrfProtection, hmac, KEY2_64);
 
     mod multi {
+
         macro_rules! test_cases {
-            ($strct1: ident, $strct2: ident, $name: ident) => {
+            ($strct1: ident, $strct2: ident, $name: ident, $key: ident, $key2: ident) => {
                 mod $name {
-                    use super::super::{super::*, KEY2_32, KEY_32};
+                    #[allow(unused)]
+                    use super::super::{super::*, KEY_32, KEY_64, KEY2_32, KEY2_64};
                     use data_encoding::BASE64;
 
                     #[test]
                     fn no_previous() {
-                        let protect = $strct1::from_key(KEY_32);
+                        let protect = $strct1::from_key($key);
                         let mut pairs = vec![];
                         let pair = protect
                             .generate_token_pair(None, 300)
@@ -803,14 +780,14 @@ mod tests {
 
                     #[test]
                     fn $name() {
-                        let protect_1 = $strct1::from_key(KEY_32);
+                        let protect_1 = $strct1::from_key($key);
                         let mut pairs = vec![];
                         let pair = protect_1
                             .generate_token_pair(None, 300)
                             .expect("couldn't generate token/cookie pair");
                         pairs.push(pair);
 
-                        let protect_2 = $strct2::from_key(KEY2_32);
+                        let protect_2 = $strct2::from_key($key2);
                         let mut pairs = vec![];
                         let pair = protect_2
                             .generate_token_pair(None, 300)
@@ -848,41 +825,71 @@ mod tests {
         test_cases!(
             AesGcmCsrfProtection,
             AesGcmCsrfProtection,
-            aesgcm_then_aesgcm
+            aesgcm_then_aesgcm,
+            KEY_32,
+            KEY2_32
         );
 
         test_cases!(
             ChaCha20Poly1305CsrfProtection,
             ChaCha20Poly1305CsrfProtection,
-            chacha20poly1305_then_chacha20poly1305
+            chacha20poly1305_then_chacha20poly1305,
+            KEY_32,
+            KEY2_32
         );
 
-        test_cases!(HmacCsrfProtection, HmacCsrfProtection, hmac_then_hmac);
+        test_cases!(
+            HmacCsrfProtection,
+            HmacCsrfProtection,
+            hmac_then_hmac,
+            KEY_64,
+            KEY2_64
+        );
 
         test_cases!(
             ChaCha20Poly1305CsrfProtection,
             AesGcmCsrfProtection,
-            chacha20poly1305_then_aesgcm
+            chacha20poly1305_then_aesgcm,
+            KEY_32,
+            KEY2_32
         );
 
-        test_cases!(HmacCsrfProtection, AesGcmCsrfProtection, hmac_then_aesgcm);
+        test_cases!(
+            HmacCsrfProtection,
+            AesGcmCsrfProtection,
+            hmac_then_aesgcm,
+            KEY_64,
+            KEY2_32
+        );
 
         test_cases!(
             AesGcmCsrfProtection,
             ChaCha20Poly1305CsrfProtection,
-            aesgcm_then_chacha20poly1305
+            aesgcm_then_chacha20poly1305,
+            KEY_32,
+            KEY2_32
         );
         test_cases!(
             HmacCsrfProtection,
             ChaCha20Poly1305CsrfProtection,
-            hmac_then_chacha20poly1305
+            hmac_then_chacha20poly1305,
+            KEY_64,
+            KEY2_32
         );
 
-        test_cases!(AesGcmCsrfProtection, HmacCsrfProtection, aesgcm_then_hmac);
+        test_cases!(
+            AesGcmCsrfProtection,
+            HmacCsrfProtection,
+            aesgcm_then_hmac,
+            KEY_32,
+            KEY2_64
+        );
         test_cases!(
             ChaCha20Poly1305CsrfProtection,
             HmacCsrfProtection,
-            chacha20poly1305_then_hmac
+            chacha20poly1305_then_hmac,
+            KEY_32,
+            KEY2_64
         );
     }
 }

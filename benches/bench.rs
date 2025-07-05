@@ -5,33 +5,34 @@ extern crate data_encoding;
 #[cfg(test)]
 extern crate test;
 
+const KEY_32: [u8; 32] = *b"01234567012345670123456701234567";
+const KEY_64: [u8; 64] = *b"0123456701234567012345670123456701234567012345670123456701234567";
+const TOKEN: [u8; 64] = *b"0123456701234567012345670123456701234567012345670123456701234567";
+
 macro_rules! benchmark {
-    ($strct: ident, $md: ident) => {
+    ($strct: ident, $md: ident, $key: ident) => {
         mod $md {
-            use csrf::{$strct, CsrfProtection};
+            use super::*;
+            use csrf::{CsrfProtection, $strct};
             use data_encoding::BASE64;
             use test::Bencher;
 
-            const KEY_32: [u8; 32] = *b"01234567012345670123456701234567";
-            const TOKEN: &[u8; 64] =
-                b"0123456701234567012345670123456701234567012345670123456701234567";
-
             #[bench]
             fn generate_pair(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 b.iter(|| {
-                    let _ = protect.generate_token_pair(Some(TOKEN), 3600);
+                    let _ = protect.generate_token_pair(Some(&TOKEN), 3600);
                 });
             }
 
             #[bench]
             fn validate_pair_success(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 let mut pairs = Vec::new();
 
                 for _ in 0..10 {
                     let (token, cookie) = protect
-                        .generate_token_pair(Some(TOKEN), 3600)
+                        .generate_token_pair(Some(&TOKEN), 3600)
                         .expect("failed to generate token");
                     let token = BASE64
                         .decode(token.b64_string().as_bytes())
@@ -53,12 +54,12 @@ macro_rules! benchmark {
 
             #[bench]
             fn parse_cookie_success(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 let mut cookies = Vec::new();
 
                 for _ in 0..10 {
                     let (_, cookie) = protect
-                        .generate_token_pair(Some(TOKEN), 3600)
+                        .generate_token_pair(Some(&TOKEN), 3600)
                         .expect("failed to generate cookie");
                     let cookie = BASE64
                         .decode(cookie.b64_string().as_bytes())
@@ -75,12 +76,12 @@ macro_rules! benchmark {
 
             #[bench]
             fn parse_token_success(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 let mut tokens = Vec::new();
 
                 for _ in 0..10 {
                     let (token, _) = protect
-                        .generate_token_pair(Some(TOKEN), 3600)
+                        .generate_token_pair(Some(&TOKEN), 3600)
                         .expect("failed to generate token");
                     let token = BASE64
                         .decode(token.b64_string().as_bytes())
@@ -97,12 +98,12 @@ macro_rules! benchmark {
 
             #[bench]
             fn parse_cookie_bad_sig(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 let mut cookies = Vec::new();
 
                 for _ in 0..10 {
                     let (_, cookie) = protect
-                        .generate_token_pair(Some(TOKEN), 3600)
+                        .generate_token_pair(Some(&TOKEN), 3600)
                         .expect("failed to generate cookie");
                     let mut cookie = BASE64
                         .decode(cookie.b64_string().as_bytes())
@@ -121,12 +122,12 @@ macro_rules! benchmark {
 
             #[bench]
             fn parse_token_bad_sig(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 let mut tokens = Vec::new();
 
                 for _ in 0..10 {
                     let (token, _) = protect
-                        .generate_token_pair(Some(TOKEN), 3600)
+                        .generate_token_pair(Some(&TOKEN), 3600)
                         .expect("failed to generate token");
                     let mut token = BASE64
                         .decode(token.b64_string().as_bytes())
@@ -145,12 +146,12 @@ macro_rules! benchmark {
 
             #[bench]
             fn parse_cookie_bad_value(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 let mut cookies = Vec::new();
 
                 for _ in 0..10 {
                     let (_, cookie) = protect
-                        .generate_token_pair(Some(TOKEN), 3600)
+                        .generate_token_pair(Some(&TOKEN), 3600)
                         .expect("failed to generate cookie");
                     let mut cookie = BASE64
                         .decode(cookie.b64_string().as_bytes())
@@ -168,12 +169,12 @@ macro_rules! benchmark {
 
             #[bench]
             fn parse_token_bad_value(b: &mut Bencher) {
-                let protect = $strct::from_key(KEY_32);
+                let protect = $strct::from_key($key);
                 let mut tokens = Vec::new();
 
                 for _ in 0..10 {
                     let (token, _) = protect
-                        .generate_token_pair(Some(TOKEN), 3600)
+                        .generate_token_pair(Some(&TOKEN), 3600)
                         .expect("failed to generate token");
                     let mut token = BASE64
                         .decode(token.b64_string().as_bytes())
@@ -192,6 +193,6 @@ macro_rules! benchmark {
     };
 }
 
-benchmark!(AesGcmCsrfProtection, aesgcm);
-benchmark!(ChaCha20Poly1305CsrfProtection, chacha20poly1305);
-benchmark!(HmacCsrfProtection, hmac);
+benchmark!(AesGcmCsrfProtection, aesgcm, KEY_32);
+benchmark!(ChaCha20Poly1305CsrfProtection, chacha20poly1305, KEY_32);
+benchmark!(HmacCsrfProtection, hmac, KEY_64);
