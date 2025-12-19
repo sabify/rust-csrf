@@ -1,12 +1,6 @@
 //! Module containing the core functionality for CSRF protection
 
-use std::{borrow::Cow, io::Cursor};
-
-use aead::{
-    Aead, AeadCore, KeyInit,
-    array::Array,
-    rand_core::{OsError, OsRng, TryRngCore},
-};
+use aead::{Aead, AeadCore, KeyInit, array::Array};
 use aes_gcm::Aes256Gcm;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use chacha20poly1305::ChaCha20Poly1305;
@@ -14,6 +8,7 @@ use chrono::{Duration, prelude::*};
 use data_encoding::{BASE64, BASE64URL};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use std::{borrow::Cow, io::Cursor};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -31,7 +26,7 @@ pub enum CsrfError {
     EncryptionFailure(String),
     /// OsRng get random failure
     #[error("OsRng get random failed: {0}")]
-    OsRng(#[from] OsError),
+    OsRng(#[from] getrandom::Error),
 }
 
 /// A signed, encrypted CSRF token that is suitable to be displayed to end users.
@@ -179,7 +174,7 @@ pub trait CsrfProtection: Send + Sync {
         // TODO We had to get rid of `ring` because of `gcc` conflicts with `rust-crypto`, and
         // `ring`'s RNG didn't require mutability. Now create a new one per call which is not a
         // great idea.
-        OsRng.try_fill_bytes(buf).map_err(Into::into)
+        getrandom::fill(buf).map_err(Into::into)
     }
 
     /// Given an optional previous token and a TTL, generate a matching token and cookie pair.
