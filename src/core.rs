@@ -209,7 +209,7 @@ pub struct HmacCsrfProtection {
 impl HmacCsrfProtection {
     /// Returns n `HmacCsrfProtection` instance with auto generated key.
     pub fn new() -> Result<Self, CsrfError> {
-        let key = HmacSha256::generate_key().map_err(CsrfError::from)?;
+        let key = HmacSha256::generate_key()?;
         Ok(HmacCsrfProtection {
             hmac: HmacSha256::new(&key),
         })
@@ -311,7 +311,7 @@ impl AesGcmCsrfProtection {
     pub fn new() -> Result<Self, CsrfError> {
         Ok(AesGcmCsrfProtection {
             aead: {
-                let key = Aes256Gcm::generate_key().map_err(CsrfError::from)?;
+                let key = Aes256Gcm::generate_key()?;
                 Aes256Gcm::new(&key)
             },
         })
@@ -341,7 +341,7 @@ impl CsrfProtection for AesGcmCsrfProtection {
         plaintext[32..40].copy_from_slice(&expires_bytes);
         plaintext[40..].copy_from_slice(token_value);
 
-        let nonce = Aes256Gcm::generate_nonce().map_err(CsrfError::from)?;
+        let nonce = Aes256Gcm::generate_nonce()?;
 
         let ciphertext = self
             .aead
@@ -362,7 +362,7 @@ impl CsrfProtection for AesGcmCsrfProtection {
         self.random_bytes(&mut plaintext[0..32])?; // padding
         plaintext[32..].copy_from_slice(token_value);
 
-        let nonce = Aes256Gcm::generate_nonce().map_err(CsrfError::from)?;
+        let nonce = Aes256Gcm::generate_nonce()?;
 
         let ciphertext = self
             .aead
@@ -434,7 +434,7 @@ pub struct ChaCha20Poly1305CsrfProtection {
 impl ChaCha20Poly1305CsrfProtection {
     /// Return a new `ChaCha20Poly1305CsrfProtection` instance with auto generated key.
     pub fn new() -> Result<Self, CsrfError> {
-        let key = ChaCha20Poly1305::generate_key().map_err(CsrfError::from)?;
+        let key = ChaCha20Poly1305::generate_key()?;
         Ok(ChaCha20Poly1305CsrfProtection {
             aead: ChaCha20Poly1305::new(&key),
         })
@@ -464,7 +464,7 @@ impl CsrfProtection for ChaCha20Poly1305CsrfProtection {
         plaintext[32..40].copy_from_slice(&expires_bytes);
         plaintext[40..].copy_from_slice(token_value);
 
-        let nonce = ChaCha20Poly1305::generate_nonce().map_err(CsrfError::from)?;
+        let nonce = ChaCha20Poly1305::generate_nonce()?;
 
         let ciphertext = self
             .aead
@@ -485,7 +485,7 @@ impl CsrfProtection for ChaCha20Poly1305CsrfProtection {
         self.random_bytes(&mut plaintext[0..32])?; // padding
         plaintext[32..].copy_from_slice(token_value);
 
-        let nonce = ChaCha20Poly1305::generate_nonce().map_err(CsrfError::from)?;
+        let nonce = ChaCha20Poly1305::generate_nonce()?;
 
         let ciphertext = self
             .aead
