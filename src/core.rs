@@ -13,6 +13,7 @@ use std::{borrow::Cow, io::Cursor};
 type HmacSha256 = Hmac<Sha256>;
 
 /// An `enum` of all CSRF related errors.
+#[non_exhaustive]
 #[derive(thiserror::Error, Debug, Eq, PartialEq, Clone)]
 pub enum CsrfError {
     /// Library error
