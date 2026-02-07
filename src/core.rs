@@ -5,6 +5,7 @@ use aes_gcm::Aes256Gcm;
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use chacha20poly1305::ChaCha20Poly1305;
 use chrono::{Duration, prelude::*};
+use crypto_common::getrandom;
 use data_encoding::{BASE64, BASE64URL};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
